@@ -1,0 +1,561 @@
+###input
+
+
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+
+public class StockTradingPlatform {
+
+    
+    static class Stock {
+        final String symbol;
+        final String companyName;
+        private double price;
+
+        Stock(String symbol, String companyName, double startingPrice) {
+            this.symbol = symbol;
+            this.companyName = companyName;
+            this.price = startingPrice;
+        }
+
+        double getPrice() {
+            return price;
+        }
+
+        // Simulates a random price tick of up to +/- 4%
+        void fluctuate(Random rng) {
+            double changePercent = (rng.nextDouble() * 8.0 - 4.0) / 100.0; // -4% to +4%
+            price = Math.max(0.50, price * (1 + changePercent));
+        }
+    }
+
+    
+    static class Market {
+        private final Map<String, Stock> stocks = new LinkedHashMap<>();
+        private final Random rng = new Random();
+
+        void addStock(Stock s) {
+            stocks.put(s.symbol, s);
+        }
+
+        Stock getStock(String symbol) {
+            return stocks.get(symbol.toUpperCase());
+        }
+
+        Collection<Stock> getAllStocks() {
+            return stocks.values();
+        }
+
+        
+        void tick() {
+            for (Stock s : stocks.values()) {
+                s.fluctuate(rng);
+            }
+        }
+
+        void displayMarket() {
+            System.out.println("\n-------------- MARKET DATA --------------");
+            System.out.printf("%-8s %-20s %-12s%n", "Symbol", "Company", "Price");
+            System.out.println("------------------------------------------");
+            for (Stock s : stocks.values()) {
+                System.out.printf("%-8s %-20s $%-11.2f%n", s.symbol, s.companyName, s.getPrice());
+            }
+            System.out.println("------------------------------------------");
+        }
+    }
+
+    
+    static class Transaction {
+        enum Type { BUY, SELL }
+
+        final Type type;
+        final String symbol;
+        final int quantity;
+        final double pricePerShare;
+        final Date timestamp;
+
+        Transaction(Type type, String symbol, int quantity, double pricePerShare, Date timestamp) {
+            this.type = type;
+            this.symbol = symbol;
+            this.quantity = quantity;
+            this.pricePerShare = pricePerShare;
+            this.timestamp = timestamp;
+        }
+
+        double total() {
+            return quantity * pricePerShare;
+        }
+
+        @Override
+        public String toString() {
+            SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            return String.format("[%s] %-4s %-6s qty=%-5d price=$%-8.2f total=$%.2f",
+                    fmt.format(timestamp), type, symbol, quantity, pricePerShare, total());
+        }
+
+        
+        String toCsv() {
+            return type + "," + symbol + "," + quantity + "," + pricePerShare + "," + timestamp.getTime();
+        }
+
+        static Transaction fromCsv(String line) {
+            String[] parts = line.split(",");
+            Type type = Type.valueOf(parts[0]);
+            String symbol = parts[1];
+            int qty = Integer.parseInt(parts[2]);
+            double price = Double.parseDouble(parts[3]);
+            Date date = new Date(Long.parseLong(parts[4]));
+            return new Transaction(type, symbol, qty, price, date);
+        }
+    }
+
+    
+    static class Portfolio {
+        private double cashBalance;
+        private final Map<String, Integer> holdings = new LinkedHashMap<>(); // symbol -> quantity
+        private final List<Transaction> history = new ArrayList<>();
+
+        Portfolio(double startingCash) {
+            this.cashBalance = startingCash;
+        }
+
+        double getCashBalance() {
+            return cashBalance;
+        }
+
+        Map<String, Integer> getHoldings() {
+            return holdings;
+        }
+
+        List<Transaction> getHistory() {
+            return history;
+        }
+
+        boolean buy(Stock stock, int quantity) {
+            double cost = stock.getPrice() * quantity;
+            if (cost > cashBalance) {
+                return false;
+            }
+            cashBalance -= cost;
+            holdings.merge(stock.symbol, quantity, Integer::sum);
+            history.add(new Transaction(Transaction.Type.BUY, stock.symbol, quantity, stock.getPrice(), new Date()));
+            return true;
+        }
+
+        boolean sell(Stock stock, int quantity) {
+            int owned = holdings.getOrDefault(stock.symbol, 0);
+            if (quantity > owned) {
+                return false;
+            }
+            double proceeds = stock.getPrice() * quantity;
+            cashBalance += proceeds;
+            int remaining = owned - quantity;
+            if (remaining == 0) {
+                holdings.remove(stock.symbol);
+            } else {
+                holdings.put(stock.symbol, remaining);
+            }
+            history.add(new Transaction(Transaction.Type.SELL, stock.symbol, quantity, stock.getPrice(), new Date()));
+            return true;
+        }
+
+        
+        double getHoldingsValue(Market market) {
+            double total = 0;
+            for (Map.Entry<String, Integer> entry : holdings.entrySet()) {
+                Stock s = market.getStock(entry.getKey());
+                if (s != null) {
+                    total += s.getPrice() * entry.getValue();
+                }
+            }
+            return total;
+        }
+
+        double getNetWorth(Market market) {
+            return cashBalance + getHoldingsValue(market);
+        }
+
+        void displaySummary(Market market, double startingCash) {
+            System.out.println("\n============= PORTFOLIO SUMMARY =============");
+            System.out.printf("Cash Balance     : $%.2f%n", cashBalance);
+            System.out.println("Holdings:");
+            if (holdings.isEmpty()) {
+                System.out.println("   (no open positions)");
+            } else {
+                System.out.printf("   %-8s %-10s %-12s %-12s%n", "Symbol", "Quantity", "Price", "Value");
+                for (Map.Entry<String, Integer> entry : holdings.entrySet()) {
+                    Stock s = market.getStock(entry.getKey());
+                    double price = (s != null) ? s.getPrice() : 0;
+                    double value = price * entry.getValue();
+                    System.out.printf("   %-8s %-10d $%-11.2f $%-11.2f%n", entry.getKey(), entry.getValue(), price, value);
+                }
+            }
+            double netWorth = getNetWorth(market);
+            double profitLoss = netWorth - startingCash;
+            System.out.printf("Holdings Value   : $%.2f%n", getHoldingsValue(market));
+            System.out.printf("Net Worth        : $%.2f%n", netWorth);
+            System.out.printf("Overall P/L      : %s$%.2f (%.2f%%)%n",
+                    profitLoss >= 0 ? "+" : "-", Math.abs(profitLoss), (profitLoss / startingCash) * 100);
+            System.out.println("===============================================");
+        }
+
+        void displayHistory() {
+            System.out.println("\n------------- TRANSACTION HISTORY -------------");
+            if (history.isEmpty()) {
+                System.out.println("No transactions yet.");
+            } else {
+                for (Transaction t : history) {
+                    System.out.println(t);
+                }
+            }
+            System.out.println("-------------------------------------------------");
+        }
+    }
+
+    
+    static class User {
+        final String username;
+        final Portfolio portfolio;
+
+        User(String username, Portfolio portfolio) {
+            this.username = username;
+            this.portfolio = portfolio;
+        }
+    }
+
+    
+    private static final String PORTFOLIO_FILE = "portfolio_data.txt";
+    private static final String TRANSACTIONS_FILE = "transactions_data.txt";
+    private static final double DEFAULT_STARTING_CASH = 10000.00;
+
+    
+    private static void saveData(Portfolio portfolio) {
+        try (PrintWriter pw = new PrintWriter(new FileWriter(PORTFOLIO_FILE))) {
+            pw.println(portfolio.getCashBalance());
+            for (Map.Entry<String, Integer> entry : portfolio.getHoldings().entrySet()) {
+                pw.println(entry.getKey() + "," + entry.getValue());
+            }
+        } catch (IOException e) {
+            System.out.println("Warning: could not save portfolio data (" + e.getMessage() + ")");
+        }
+
+        try (PrintWriter pw = new PrintWriter(new FileWriter(TRANSACTIONS_FILE))) {
+            for (Transaction t : portfolio.getHistory()) {
+                pw.println(t.toCsv());
+            }
+        } catch (IOException e) {
+            System.out.println("Warning: could not save transaction history (" + e.getMessage() + ")");
+        }
+    }
+
+   
+    private static Portfolio loadData() {
+        File file = new File(PORTFOLIO_FILE);
+        if (!file.exists()) {
+            return new Portfolio(DEFAULT_STARTING_CASH);
+        }
+
+        Portfolio portfolio;
+        try (BufferedReader br = new BufferedReader(new FileReader(file))) {
+            String firstLine = br.readLine();
+            double cash = (firstLine != null) ? Double.parseDouble(firstLine.trim()) : DEFAULT_STARTING_CASH;
+            portfolio = new Portfolio(cash);
+
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+                String[] parts = line.split(",");
+                portfolio.getHoldings().put(parts[0], Integer.parseInt(parts[1]));
+            }
+        } catch (IOException e) {
+            System.out.println("Warning: could not load saved portfolio, starting fresh.");
+            return new Portfolio(DEFAULT_STARTING_CASH);
+        }
+
+        File txFile = new File(TRANSACTIONS_FILE);
+        if (txFile.exists()) {
+            try (BufferedReader br = new BufferedReader(new FileReader(txFile))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    if (line.trim().isEmpty()) continue;
+                    portfolio.getHistory().add(Transaction.fromCsv(line));
+                }
+            } catch (IOException e) {
+                System.out.println("Warning: could not load transaction history.");
+            }
+        }
+
+        return portfolio;
+    }
+
+    
+    private static final Scanner scanner = new Scanner(System.in);
+
+    public static void main(String[] args) {
+        System.out.println("=================================================");
+        System.out.println("        STOCK TRADING PLATFORM SIMULATION");
+        System.out.println("=================================================");
+
+        Market market = buildMarket();
+
+        System.out.print("Enter your username: ");
+        String username = scanner.nextLine().trim();
+        if (username.isEmpty()) username = "trader1";
+
+        Portfolio portfolio = loadData();
+        boolean isNew = portfolio.getHistory().isEmpty() && portfolio.getHoldings().isEmpty()
+                && portfolio.getCashBalance() == DEFAULT_STARTING_CASH;
+        User user = new User(username, portfolio);
+
+        if (isNew) {
+            System.out.printf("Welcome, %s! Starting cash balance: $%.2f%n", user.username, portfolio.getCashBalance());
+        } else {
+            System.out.printf("Welcome back, %s! Loaded saved portfolio.%n", user.username);
+        }
+
+        boolean running = true;
+        while (running) {
+            printMenu();
+            int choice = readInt("Enter your choice: ");
+
+            switch (choice) {
+                case 1:
+                    market.displayMarket();
+                    break;
+                case 2:
+                    handleBuy(market, portfolio);
+                    break;
+                case 3:
+                    handleSell(market, portfolio);
+                    break;
+                case 4:
+                    portfolio.displaySummary(market, DEFAULT_STARTING_CASH);
+                    break;
+                case 5:
+                    portfolio.displayHistory();
+                    break;
+                case 6:
+                    System.out.println("Simulating market movement...");
+                    market.tick();
+                    System.out.println("Prices updated.");
+                    break;
+                case 7:
+                    saveData(portfolio);
+                    System.out.println("Portfolio saved. Goodbye, " + user.username + "!");
+                    running = false;
+                    break;
+                default:
+                    System.out.println("Invalid choice. Please select 1-7.");
+            }
+        }
+
+        scanner.close();
+    }
+
+    private static Market buildMarket() {
+        Market market = new Market();
+        market.addStock(new Stock("AAPL", "Apple Inc.", 190.00));
+        market.addStock(new Stock("GOOGL", "Alphabet Inc.", 165.00));
+        market.addStock(new Stock("AMZN", "Amazon.com Inc.", 178.00));
+        market.addStock(new Stock("MSFT", "Microsoft Corp.", 415.00));
+        market.addStock(new Stock("TSLA", "Tesla Inc.", 245.00));
+        market.addStock(new Stock("NFLX", "Netflix Inc.", 620.00));
+        return market;
+    }
+
+    private static void printMenu() {
+        System.out.println("\n------------------- MENU -------------------");
+        System.out.println("1. View Market Data");
+        System.out.println("2. Buy Stock");
+        System.out.println("3. Sell Stock");
+        System.out.println("4. View Portfolio Summary");
+        System.out.println("5. View Transaction History");
+        System.out.println("6. Simulate Market Tick (update prices)");
+        System.out.println("7. Save & Exit");
+        System.out.println("----------------------------------------------");
+    }
+
+    private static void handleBuy(Market market, Portfolio portfolio) {
+        market.displayMarket();
+        System.out.print("Enter stock symbol to buy: ");
+        String symbol = scanner.nextLine().trim().toUpperCase();
+        Stock stock = market.getStock(symbol);
+
+        if (stock == null) {
+            System.out.println("Symbol not found in market.");
+            return;
+        }
+
+        int quantity = readInt("Enter quantity to buy: ");
+        if (quantity <= 0) {
+            System.out.println("Quantity must be positive.");
+            return;
+        }
+
+        double cost = stock.getPrice() * quantity;
+        System.out.printf("Cost: $%.2f (available cash: $%.2f)%n", cost, portfolio.getCashBalance());
+
+        if (portfolio.buy(stock, quantity)) {
+            System.out.printf("Bought %d shares of %s at $%.2f each.%n", quantity, symbol, stock.getPrice());
+        } else {
+            System.out.println("Insufficient cash balance for this purchase.");
+        }
+    }
+
+    private static void handleSell(Market market, Portfolio portfolio) {
+        if (portfolio.getHoldings().isEmpty()) {
+            System.out.println("You have no holdings to sell.");
+            return;
+        }
+
+        System.out.println("Current holdings: " + portfolio.getHoldings());
+        System.out.print("Enter stock symbol to sell: ");
+        String symbol = scanner.nextLine().trim().toUpperCase();
+        Stock stock = market.getStock(symbol);
+
+        if (stock == null) {
+            System.out.println("Symbol not found in market.");
+            return;
+        }
+
+        int quantity = readInt("Enter quantity to sell: ");
+        if (quantity <= 0) {
+            System.out.println("Quantity must be positive.");
+            return;
+        }
+
+        if (portfolio.sell(stock, quantity)) {
+            System.out.printf("Sold %d shares of %s at $%.2f each.%n", quantity, symbol, stock.getPrice());
+        } else {
+            System.out.println("You don't own enough shares to sell that quantity.");
+        }
+    }
+
+    private static int readInt(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String line = scanner.nextLine().trim();
+            try {
+                return Integer.parseInt(line);
+            } catch (NumberFormatException e) {
+                System.out.println("Please enter a valid whole number.");
+            }
+        }
+    }
+}
+
+
+
+####OUTput
+=================================================
+        STOCK TRADING PLATFORM SIMULATION
+=================================================
+Enter your username: Sharvesg h
+Welcome, Sharvesh! Starting cash balance: $10000.00
+
+------------------- MENU -------------------
+1. View Market Data
+2. Buy Stock
+3. Sell Stock
+4. View Portfolio Summary
+5. View Transaction History
+6. Simulate Market Tick (update prices)
+7. Save & Exit
+----------------------------------------------
+Enter your choice: 1
+
+-------------- MARKET DATA --------------
+Symbol   Company              Price       
+------------------------------------------
+AAPL     Apple Inc.           $190.00     
+GOOGL    Alphabet Inc.        $165.00     
+AMZN     Amazon.com Inc.      $178.00     
+MSFT     Microsoft Corp.      $415.00     
+TSLA     Tesla Inc.           $245.00     
+NFLX     Netflix Inc.         $620.00     
+------------------------------------------
+
+------------------- MENU -------------------
+1. View Market Data
+2. Buy Stock
+3. Sell Stock
+4. View Portfolio Summary
+5. View Transaction History
+6. Simulate Market Tick (update prices)
+7. Save & Exit
+----------------------------------------------
+Enter your choice: 2
+
+-------------- MARKET DATA --------------
+Symbol   Company              Price       
+------------------------------------------
+AAPL     Apple Inc.           $190.00     
+GOOGL    Alphabet Inc.        $165.00     
+AMZN     Amazon.com Inc.      $178.00     
+MSFT     Microsoft Corp.      $415.00     
+TSLA     Tesla Inc.           $245.00     
+NFLX     Netflix Inc.         $620.00     
+------------------------------------------
+Enter stock symbol to buy: 3
+Symbol not found in market.
+
+------------------- MENU -------------------
+1. View Market Data
+2. Buy Stock
+3. Sell Stock
+4. View Portfolio Summary
+5. View Transaction History
+6. Simulate Market Tick (update prices)
+7. Save & Exit
+----------------------------------------------
+Enter your choice: 4
+
+============= PORTFOLIO SUMMARY =============
+Cash Balance     : $10000.00
+Holdings:
+   (no open positions)
+Holdings Value   : $0.00
+Net Worth        : $10000.00
+Overall P/L      : +$0.00 (0.00%)
+===============================================
+
+------------------- MENU -------------------
+1. View Market Data
+2. Buy Stock
+3. Sell Stock
+4. View Portfolio Summary
+5. View Transaction History
+6. Simulate Market Tick (update prices)
+7. Save & Exit
+----------------------------------------------
+Enter your choice: 5
+
+------------- TRANSACTION HISTORY -------------
+No transactions yet.
+-------------------------------------------------
+
+------------------- MENU -------------------
+1. View Market Data
+2. Buy Stock
+3. Sell Stock
+4. View Portfolio Summary
+5. View Transaction History
+6. Simulate Market Tick (update prices)
+7. Save & Exit
+----------------------------------------------
+Enter your choice: 6
+Simulating market movement...
+Prices updated.
+
+------------------- MENU -------------------
+1. View Market Data
+2. Buy Stock
+3. Sell Stock
+4. View Portfolio Summary
+5. View Transaction History
+6. Simulate Market Tick (update prices)
+7. Save & Exit
+----------------------------------------------
+Enter your choice: 7
+Portfolio saved. Goodbye, Sharvesh!
